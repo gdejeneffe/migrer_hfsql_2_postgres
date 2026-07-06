@@ -10,7 +10,7 @@ Ce script a été **généré avec l'aide d'une IA** (Claude, Anthropic) à part
 
 ## ⚠️ Disclaimer
 
-Code fourni "tel quel". Vérifie la logique (notamment la gestion des FK, des orphelins et des colonnes binaires) avant de l'exécuter sur une base contenant des données réelles. Un backup avant migration reste la moindre des choses.
+Code fourni "tel quel". Vérifiez la logique (notamment la gestion des FK, des orphelins et des colonnes binaires) avant de l'exécuter sur une base contenant des données réelles. Un backup avant toute migration est indispensable.
 
 ## 🔧 Prérequis
 
