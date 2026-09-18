@@ -22,6 +22,22 @@
 //
 //  ⚠ À valider dans l'IDE : parcours d'un résultat information_schema
 //    (hRequêteSansCorrection, sans paramètre) via POUR TOUT.
+//
+//  CASSE DES NOMS — corrigé le 2026-09-18
+//    WINDEV nomme ses fichiers et rubriques en MAJUSCULES ; PostgreSQL replie
+//    tout identifiant non protégé en minuscules, et c'est ce que rend
+//    information_schema. Les clés des tableaux associatifs venaient donc des
+//    deux casses à la fois : « DOCUMENT.REF_PROCEDURE » à la lecture,
+//    « document.ref_procedure » à l'écriture.
+//
+//    Aucune clé ne correspondait, et TOUTES les colonnes étaient exclues par le
+//    CONTINUER silencieux — sans une seule erreur. Un schéma cible en majuscules
+//    entre guillemets masquait le défaut ; un schéma aux usages PostgreSQL le
+//    révèle.
+//
+//    Toutes les clés sont désormais normalisées en minuscules, des deux côtés.
+//    La correction vaut aussi pour gtabPK, dont la lecture croisait un nom
+//    HFSQL avec un index PostgreSQL au moment de réinjecter les binaires.
 // ============================================================================
 
 PROCÉDURE ETL_Generique()
@@ -73,7 +89,7 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 		"SELECT table_name, column_name FROM information_schema.columns " + ...
 		"WHERE table_schema = 'public'")
 	POUR TOUT sdMeta
-		gtabColPG[sdMeta.table_name + "." + sdMeta.column_name] = Vrai
+		gtabColPG[Minuscule(sdMeta.table_name + "." + sdMeta.column_name)] = Vrai
 	FIN
 	HAnnuleDéclaration(sdMeta)
 
@@ -85,7 +101,7 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 		"  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " + ...
 		"WHERE tc.table_schema = 'public' AND tc.constraint_type = 'UNIQUE'")
 	POUR TOUT sdMeta
-		gtabUnique[sdMeta.t + "." + sdMeta.c] = Vrai
+		gtabUnique[Minuscule(sdMeta.t + "." + sdMeta.c)] = Vrai
 	FIN
 	HAnnuleDéclaration(sdMeta)
 
@@ -97,7 +113,7 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 		"  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " + ...
 		"WHERE tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY'")
 	POUR TOUT sdMeta
-		gtabPK[sdMeta.t] = sdMeta.c
+		gtabPK[Minuscule(sdMeta.t)] = sdMeta.c
 	FIN
 	HAnnuleDéclaration(sdMeta)
 
@@ -129,7 +145,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 
 	POUR TOUTE CHAÎNE sRub DE sListeRub SÉPARÉE PAR RC
 		SI sRub = "" ALORS CONTINUER
-		sCle = sFic + "." + sRub
+		sCle = Minuscule(sFic + "." + sRub)
 		SI gtabColPG[sCle] <> Vrai ALORS CONTINUER      // absente côté PG -> exclue (auto)
 		SI gtabColExclues[sCle] = Vrai ALORS CONTINUER  // horodatage auto (config)
 		nType = TypeVar({sFic + "." + sRub})
@@ -164,7 +180,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 			sVal = {sFic + "." + tabCols[j]}
 			SI tabEstDate[j] ET (sVal = "" OU Gauche(sVal, 4) = "0000") ALORS
 				tabEnr[tabParam[j]] = Null                                  // date vide -> NULL
-			SINON SI gtabUnique[sFic + "." + tabCols[j]] = Vrai ET SansEspace(sVal) = "" ALORS
+			SINON SI gtabUnique[Minuscule(sFic + "." + tabCols[j])] = Vrai ET SansEspace(sVal) = "" ALORS
 				tabEnr[tabParam[j]] = Null                                  // UNIQUE vide -> NULL
 			SINON
 				tabEnr[tabParam[j]] = {sFic + "." + tabCols[j]}
@@ -275,9 +291,10 @@ PROCÉDURE INTERNE ResyncSequences()
 // ============================== CORPS PRINCIPAL =============================
 // CONFIG (remplissage) : tables à ne pas migrer + colonnes horodatage-auto
 // COMPLETER SELON LA DB
-gtabTablesExclues["TraceLog"]     = Vrai       // horodatage automatique
-gtabTablesExclues["table1"]    = Vrai
-gtabTablesExclues["Table2"] = Vrai
+// Les noms sont comparés en minuscules : la casse saisie ici n'a pas d'importance.
+gtabTablesExclues["tracelog"] = Vrai       // horodatage automatique
+gtabTablesExclues["table1"]   = Vrai
+gtabTablesExclues["table2"]   = Vrai
 
 
 cnxSource.Provider      = hAccèsHFClientServeur
@@ -308,14 +325,14 @@ ChargerMetadonnees()
 sListeFic = HListeFichier()
 POUR TOUTE CHAÎNE sFichier DE sListeFic SÉPARÉE PAR RC
 	SI sFichier = "" ALORS CONTINUER
-	SI gtabTablesExclues[sFichier] = Vrai ALORS CONTINUER
+	SI gtabTablesExclues[Minuscule(sFichier)] = Vrai ALORS CONTINUER
 	nTotal = CopierTable(sFichier)
 	SI nTotal >= 0 ALORS tabRapport[sFichier] = nTotal
 FIN
 
 // 2) Colonnes binaires (collectées pendant la phase 1) -> UPDATE decode(hex)
 POUR i = 1 À gtabBinTable.Occurrence
-	CopierBinaire(gtabBinTable[i], gtabBinCol[i], gtabPK[gtabBinTable[i]])
+	CopierBinaire(gtabBinTable[i], gtabBinCol[i], gtabPK[Minuscule(gtabBinTable[i])])
 FIN
 
 // 3) Resync des séquences SERIAL
