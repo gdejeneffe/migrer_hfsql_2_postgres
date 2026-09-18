@@ -64,7 +64,8 @@ gtabTablesExclues est un tableau associatif de booléens
 gtabColExclues    est un tableau associatif de booléens
 
 // ======================= MÉTADONNÉES (auto, remplies au démarrage) ==========
-gtabColPG    est un tableau associatif de booléens   // "table.col" présentes côté PG
+gtabColPG    est un tableau associatif de chaînes    // "table.col" minuscule -> NOM RÉEL de la colonne côté PG
+gtabTablePG  est un tableau associatif de chaînes    // "table" minuscule    -> NOM RÉEL de la table côté PG
 gtabUnique   est un tableau associatif de booléens   // "table.col" sous contrainte UNIQUE
 gtabPK       est un tableau associatif de chaînes     // table -> colonne PK
 gtabBinTable est un tableau de chaînes                // tables ayant une colonne binaire
@@ -89,7 +90,8 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 		"SELECT table_name, column_name FROM information_schema.columns " + ...
 		"WHERE table_schema = 'public'")
 	POUR TOUT sdMeta
-		gtabColPG[Minuscule(sdMeta.table_name + "." + sdMeta.column_name)] = Vrai
+		gtabColPG[Minuscule(sdMeta.table_name + "." + sdMeta.column_name)] = sdMeta.column_name
+		gtabTablePG[Minuscule(sdMeta.table_name)] = sdMeta.table_name
 	FIN
 	HAnnuleDéclaration(sdMeta)
 
@@ -146,7 +148,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	POUR TOUTE CHAÎNE sRub DE sListeRub SÉPARÉE PAR RC
 		SI sRub = "" ALORS CONTINUER
 		sCle = Minuscule(sFic + "." + sRub)
-		SI gtabColPG[sCle] <> Vrai ALORS CONTINUER      // absente côté PG -> exclue (auto)
+		SI gtabColPG[sCle] = "" ALORS CONTINUER         // absente côté PG -> exclue (auto)
 		SI gtabColExclues[sCle] = Vrai ALORS CONTINUER  // horodatage auto (config)
 		nType = TypeVar({sFic + "." + sRub})
 		SI nType = wlBuffer OU nType = wlMémoBinaire ALORS
@@ -162,7 +164,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 			sColonnes += ", "
 			sValeurs  += ", "
 		FIN
-		sColonnes += """" + sRub + """"
+		sColonnes += """" + gtabColPG[Minuscule(sFic + "." + sRub)] + """"
 		sValeurs  += "{p" + j + "}"
 	FIN
 
@@ -171,7 +173,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 		HFerme(sFic)
 		RENVOYER 0
 	FIN
-	sSQL = "INSERT INTO """ + sFic + """ (" + sColonnes + ") VALUES (" + sValeurs + ")"
+	sSQL = "INSERT INTO """ + gtabTablePG[Minuscule(sFic)] + """ (" + sColonnes + ") VALUES (" + sValeurs + ")"
 
 	HLitPremier(sFic)
 	TANTQUE PAS HEnDehors(sFic)
@@ -193,8 +195,8 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 
 	// --- Phase 2 : écriture cible (fichier rebranché sur PG, INSERT mode défaut) ---
 	HChangeConnexion(sFic, cnxCible)
-	SI PAS HExécuteRequêteSQL(sdVide, cnxCible, "DELETE FROM " + sFic) ALORS
-		Trace("[ERR DELETE] " + sFic + " : " + HErreurInfo(hErrComplet))
+	SI PAS HExécuteRequêteSQL(sdVide, cnxCible, "TRUNCATE TABLE """ + gtabTablePG[Minuscule(sFic)] + """") ALORS
+		Trace("[ERR TRUNCATE] " + sFic + " : " + HErreurInfo(hErrComplet))
 	FIN
 	HAnnuleDéclaration(sdVide)
 
@@ -248,7 +250,8 @@ PROCÉDURE INTERNE CopierBinaire(sTable est chaîne, sBinCol est chaîne, sPKCol
 
 	HChangeConnexion(sTable, cnxCible)
 	POUR k = 1 À tabPK.Occurrence
-		sSQL = "UPDATE """ + sTable + """ SET """ + sBinCol + """ = decode('" + tabHex[k] + ...
+		sSQL = "UPDATE """ + gtabTablePG[Minuscule(sTable)] + """ SET """ + ...
+			gtabColPG[Minuscule(sTable + "." + sBinCol)] + """ = decode('" + tabHex[k] + ...
 			"','hex') WHERE """ + sPKCol + """ = '" + tabPK[k] + "'"
 		SI HExécuteRequêteSQL(sdUpd, cnxCible, hRequêteSansCorrection, sSQL) ALORS
 			nMaj++
@@ -271,7 +274,8 @@ PROCÉDURE INTERNE ResyncSequences()
 
 	HExécuteRequêteSQL(sdSeq, cnxCible, hRequêteSansCorrection, ...
 		"SELECT table_name AS t, column_name AS c FROM information_schema.columns " + ...
-		"WHERE table_schema = 'public' AND column_default LIKE 'nextval%'")
+		"WHERE table_schema = 'public' " + ...
+		"  AND (column_default LIKE 'nextval%' OR is_identity = 'YES')")
 	POUR TOUT sdSeq
 		sT = sdSeq.t
 		sC = sdSeq.c
