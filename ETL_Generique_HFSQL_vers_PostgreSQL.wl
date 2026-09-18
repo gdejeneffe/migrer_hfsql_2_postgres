@@ -40,7 +40,14 @@
 //    HFSQL avec un index PostgreSQL au moment de réinjecter les binaires.
 // ============================================================================
 
-PROCÉDURE ETL_Generique()
+// Appelable de deux façons, et la seconde évite de dupliquer ce fichier :
+//
+//   ETL_Generique()                        -> emploie la section CONFIG ci-dessous
+//   ETL_Generique("srv", "base", ...)      -> une procédure appelante fournit tout
+//
+// Tout paramètre laissé vide retombe sur la constante correspondante : l'usage
+// d'origine continue de fonctionner à l'identique.
+PROCÉDURE ETL_Generique(sSrcServeur est une chaîne = "", sSrcBase est une chaîne = "", sSrcUser est une chaîne = "", sSrcMdp est une chaîne = "", sSrcMdpFichier est une chaîne = "", sPgServeur est une chaîne = "", sPgPort est une chaîne = "", sPgBase est une chaîne = "", sPgUser est une chaîne = "", sPgMdp est une chaîne = "", sTablesExclues est une chaîne = "", sColonnesExclues est une chaîne = "")
 
 // ======================= CONFIG (à adapter par programme) ===================
 CONSTANT
@@ -73,6 +80,7 @@ gtabBinCol   est un tableau de chaînes                // colonne binaire corres
 
 cnxSource est une Connexion
 cnxCible  est une Connexion
+sExclue   est une chaîne
 sFichier, sListeFic  sont des chaînes
 nTotal    est un entier
 i         est un entier
@@ -296,27 +304,52 @@ PROCÉDURE INTERNE ResyncSequences()
 // CONFIG (remplissage) : tables à ne pas migrer + colonnes horodatage-auto
 // COMPLETER SELON LA DB
 // Les noms sont comparés en minuscules : la casse saisie ici n'a pas d'importance.
-gtabTablesExclues["tracelog"] = Vrai       // horodatage automatique
-gtabTablesExclues["table1"]   = Vrai
-gtabTablesExclues["table2"]   = Vrai
+// Décommenter et compléter si le script est lancé SANS paramètres.
+//gtabTablesExclues["tracelog"] = Vrai     // horodatage automatique
 
+// Exclusions fournies par la procédure appelante, en listes séparées par des
+// virgules. Les colonnes se nomment « TABLE.COLONNE ».
+//
+// C'est par là que passent les colonnes à NE JAMAIS copier — un mot de passe
+// chiffré de façon réversible ne doit pas être transporté : s'il n'arrive pas
+// dans la cible, il ne peut pas y être déchiffré.
+POUR TOUTE CHAÎNE sExclue DE sTablesExclues SÉPARÉE PAR ","
+	SI sExclue <> "" ALORS gtabTablesExclues[Minuscule(SansEspace(sExclue))] = Vrai
+FIN
+
+POUR TOUTE CHAÎNE sExclue DE sColonnesExclues SÉPARÉE PAR ","
+	SI sExclue <> "" ALORS gtabColExclues[Minuscule(SansEspace(sExclue))] = Vrai
+FIN
+
+
+// Un paramètre vide retombe sur la constante : rétrocompatible.
+SI sSrcServeur    = "" ALORS sSrcServeur    = SRC_SERVEUR
+SI sSrcBase       = "" ALORS sSrcBase       = SRC_BASE
+SI sSrcUser       = "" ALORS sSrcUser       = SRC_USER
+SI sSrcMdp        = "" ALORS sSrcMdp        = SRC_MDP
+SI sSrcMdpFichier = "" ALORS sSrcMdpFichier = SRC_MDP_FICHIER
+SI sPgServeur     = "" ALORS sPgServeur     = PG_SERVEUR
+SI sPgPort        = "" ALORS sPgPort        = PG_PORT
+SI sPgBase        = "" ALORS sPgBase        = PG_BASE
+SI sPgUser        = "" ALORS sPgUser        = PG_USER
+SI sPgMdp         = "" ALORS sPgMdp         = PG_MDP
 
 cnxSource.Provider      = hAccèsHFClientServeur
-cnxSource.Serveur       = SRC_SERVEUR
-cnxSource.BaseDeDonnées = SRC_BASE
-cnxSource.Utilisateur   = SRC_USER
-cnxSource.MotDePasse    = SRC_MDP
+cnxSource.Serveur       = sSrcServeur
+cnxSource.BaseDeDonnées = sSrcBase
+cnxSource.Utilisateur   = sSrcUser
+cnxSource.MotDePasse    = sSrcMdp
 SI PAS HOuvreConnexion(cnxSource) ALORS
 	Erreur("Connexion HFSQL source impossible : " + HErreurInfo(hErrComplet))
 	RENVOYER Faux
 FIN
 
 cnxCible.Provider      = hAccèsNatifPostgreSQL
-cnxCible.Serveur       = PG_SERVEUR
-cnxCible.InfosEtendues = "Server Port=" + PG_PORT
-cnxCible.BaseDeDonnées = PG_BASE
-cnxCible.Utilisateur   = PG_USER
-cnxCible.MotDePasse    = PG_MDP
+cnxCible.Serveur       = sPgServeur
+cnxCible.InfosEtendues = "Server Port=" + sPgPort
+cnxCible.BaseDeDonnées = sPgBase
+cnxCible.Utilisateur   = sPgUser
+cnxCible.MotDePasse    = sPgMdp
 SI PAS HOuvreConnexion(cnxCible) ALORS
 	Erreur("Connexion PostgreSQL cible impossible : " + HErreurInfo(hErrComplet))
 	HFermeConnexion(cnxSource)

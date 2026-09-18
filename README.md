@@ -44,6 +44,23 @@ en collision de clé. La détection couvre maintenant `is_identity = 'YES'`.
 état franc. Un `DELETE` sur une table volumineuse laisse par ailleurs le travail au
 VACUUM.
 
+## 🔌 Deux façons de l'appeler
+
+```wlangage
+ETL_Generique()                       // emploie la section CONFIG du fichier
+ETL_Generique(sSrv, sBase, sUser, sMdp, sMdpFichier, ...)   // tout est fourni
+```
+
+La seconde forme **évite de dupliquer ce fichier** pour chaque projet : une procédure
+appelante porte la configuration, et celle-ci reste à jour d'un `git pull`. Tout
+paramètre laissé vide retombe sur la constante correspondante, donc l'usage d'origine
+continue de fonctionner à l'identique.
+
+Les deux derniers paramètres sont des listes séparées par des virgules : tables à ne pas
+migrer, et colonnes à ne pas copier (`TABLE.COLONNE`). **C'est par là qu'on exclut un mot
+de passe** : un secret chiffré de façon réversible ne doit pas être transporté — s'il
+n'arrive pas dans la cible, il ne peut pas y être déchiffré.
+
 ## ⚠️ Disclaimer
 
 Code fourni "tel quel". Vérifiez la logique (notamment la gestion des FK, des orphelins et des colonnes binaires) avant de l'exécuter sur une base contenant des données réelles. Un backup avant toute migration est indispensable.
