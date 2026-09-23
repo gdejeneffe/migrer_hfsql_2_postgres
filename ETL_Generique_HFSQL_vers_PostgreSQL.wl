@@ -47,7 +47,7 @@
 //
 // Tout paramètre laissé vide retombe sur la constante correspondante : l'usage
 // d'origine continue de fonctionner à l'identique.
-PROCÉDURE ETL_Generique(sSrcServeur est une chaîne = "", sSrcBase est une chaîne = "", sSrcUser est une chaîne = "", sSrcMdp est une chaîne = "", sSrcMdpFichier est une chaîne = "", sPgServeur est une chaîne = "", sPgPort est une chaîne = "", sPgBase est une chaîne = "", sPgUser est une chaîne = "", sPgMdp est une chaîne = "", sTablesExclues est une chaîne = "", sColonnesExclues est une chaîne = "")
+PROCÉDURE ETL_Generique(sSrcServeur est une chaîne = "", sSrcBase est une chaîne = "", sSrcUser est une chaîne = "", sSrcMdp est une chaîne = "", LOCAL sSrcMdpFichier est une chaîne = "", sPgServeur est une chaîne = "", sPgPort est une chaîne = "", sPgBase est une chaîne = "", sPgUser est une chaîne = "", sPgMdp est une chaîne = "", sTablesExclues est une chaîne = "", sColonnesExclues est une chaîne = "")
 
 // ======================= CONFIG (à adapter par programme) ===================
 CONSTANT
