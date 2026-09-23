@@ -47,7 +47,7 @@
 //
 // Tout paramètre laissé vide retombe sur la constante correspondante : l'usage
 // d'origine continue de fonctionner à l'identique.
-PROCÉDURE ETL_Generique(sSrcServeur est une chaîne = "", sSrcBase est une chaîne = "", sSrcUser est une chaîne = "", sSrcMdp est une chaîne = "", LOCAL sSrcMdpFichier est une chaîne = "", sPgServeur est une chaîne = "", sPgPort est une chaîne = "", sPgBase est une chaîne = "", sPgUser est une chaîne = "", sPgMdp est une chaîne = "", sTablesExclues est une chaîne = "", sColonnesExclues est une chaîne = "")
+PROCÉDURE ETL_Generique(sSrcServeur est une chaîne = "", sSrcBase est une chaîne = "", sSrcUser est une chaîne = "", sSrcMdp est une chaîne = "", LOCAL sSrcMdpFichier est une chaîne = "", sPgServeur est une chaîne = "", sPgPort est une chaîne = "", sPgBase est une chaîne = "", sPgUser est une chaîne = "", sPgMdp est une chaîne = "", sTablesExclues est une chaîne = "", sColonnesExclues est une chaîne = "", sTablesSeules est une chaîne = "")
 
 // ======================= CONFIG (à adapter par programme) ===================
 CONSTANT
@@ -68,6 +68,7 @@ FIN
 // Tables exclues + colonnes horodatage-auto : DÉCLARÉES ici, REMPLIES dans le
 // corps (le code exécutable doit suivre les procédures internes).
 gtabTablesExclues est un tableau associatif de booléens
+gtabTablesSeules  est un tableau associatif de booléens   // vide = toutes les tables
 gtabColExclues    est un tableau associatif de booléens
 
 // ======================= MÉTADONNÉES (auto, remplies au démarrage) ==========
@@ -124,10 +125,12 @@ FIN
 PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	sRub, sListeRub, sCle          sont des chaînes
 	sColonnes, sValeurs, sSQL, sVal sont des chaînes
+	sIso      est une chaîne
 	nEcrits, j, nType              sont des entiers = 0
 	tabCols   est un tableau de chaînes
 	tabParam  est un tableau de chaînes
 	tabEstDate est un tableau de booléens
+	tabType    est un tableau d'entiers
 	sdInsert est une Source de Données
 	sdVide   est une Source de Données
 	tabEnr    est un tableau associatif de Variant
@@ -137,7 +140,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	HChangeConnexion(sFic, cnxSource)
 	HPasse(sFic, sSrcMdpFichier)
 	SI PAS HOuvre(sFic) ALORS
-		Trace("[ERR ouverture] " + sFic + " : " + HErreurInfo(hErrComplet))
+		Trace("[ERR ouverture] " + sFic + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 		RENVOYER -1
 	FIN
 	sListeRub = HListeRubrique(sFic)
@@ -157,6 +160,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 		Ajoute(tabCols, sRub)
 		Ajoute(tabParam, "p" + j)
 		Ajoute(tabEstDate, (nType = wlDate OU nType = wlDateHeure))
+		Ajoute(tabType, nType)
 		SI j > 1 ALORS
 			sColonnes += ", "
 			sValeurs  += ", "
@@ -181,6 +185,14 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 				tabEnr[tabParam[j]] = Null                                  // date vide -> NULL
 			SINON SI gtabUnique[Minuscule(sFic + "." + tabCols[j])] = Vrai ET SansEspace(sVal) = "" ALORS
 				tabEnr[tabParam[j]] = Null                                  // UNIQUE vide -> NULL
+			SINON SI tabType[j] = wlDate ALORS
+				// AAAAMMJJ -> AAAA-MM-JJ : sans correction, rien ne formate à notre place.
+				tabEnr[tabParam[j]] = Gauche(sVal, 4) + "-" + Milieu(sVal, 5, 2) + "-" + Milieu(sVal, 7, 2)
+			SINON SI tabType[j] = wlDateHeure ALORS
+				// AAAAMMJJHHMMSS[CC] -> AAAA-MM-JJ HH:MM:SS[.CC]
+				sIso = Gauche(sVal, 4) + "-" + Milieu(sVal, 5, 2) + "-" + Milieu(sVal, 7, 2) + " " + Milieu(sVal, 9, 2) + ":" + Milieu(sVal, 11, 2) + ":" + Milieu(sVal, 13, 2)
+				SI Taille(sVal) > 14 ALORS sIso += "." + Milieu(sVal, 15)
+				tabEnr[tabParam[j]] = sIso
 			SINON
 				tabEnr[tabParam[j]] = {sFic + "." + tabCols[j]}
 			FIN
@@ -190,10 +202,10 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	FIN
 	HFerme(sFic)
 
-	// --- Phase 2 : écriture cible (fichier rebranché sur PG, INSERT mode défaut) ---
+	// --- Phase 2 : écriture cible (fichier rebranché sur PG, INSERT sans correction) ---
 	HChangeConnexion(sFic, cnxCible)
 	SI PAS HExécuteRequêteSQL(sdVide, cnxCible, "TRUNCATE TABLE """ + gtabTablePG[Minuscule(sFic)] + """") ALORS
-		Trace("[ERR TRUNCATE] " + sFic + " : " + HErreurInfo(hErrComplet))
+		Trace("[ERR TRUNCATE] " + sFic + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 	FIN
 	HAnnuleDéclaration(sdVide)
 
@@ -201,10 +213,14 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 		POUR j = 1 À tabParam.Occurrence
 			{"sdInsert." + tabParam[j]} = tabEnr[tabParam[j]]
 		FIN
-		SI HExécuteRequêteSQL(sdInsert, cnxCible, sSQL) ALORS
+		// hRequêteSansCorrection est indispensable ici. Sans elle, WINDEV interprète
+		// la requête, reconnaît le fichier de l'analyse et la RÉÉCRIT avec ses noms
+		// HFSQL : INSERT INTO "DOCUMENT" ("IDDOCUMENT", ...) -> 42P01, relation
+		// inexistante, sur chaque ligne. Relevé le 2026-09-23 au premier run réel.
+		SI HExécuteRequêteSQL(sdInsert, cnxCible, hRequêteSansCorrection, sSQL) ALORS
 			nEcrits++
 		SINON
-			Trace("[ERR INSERT] " + sFic + " : " + HErreurInfo(hErrComplet))
+			Trace("[ERR INSERT] " + sFic + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 		FIN
 	FIN
 	HAnnuleDéclaration(sdInsert)
@@ -232,7 +248,7 @@ PROCÉDURE INTERNE CopierBinaire(sTable est chaîne, sBinCol est chaîne, sPKCol
 	HChangeConnexion(sTable, cnxSource)
 	HPasse(sTable, sSrcMdpFichier)
 	SI PAS HOuvre(sTable) ALORS
-		Trace("[ERR BIN ouverture] " + sTable + " : " + HErreurInfo(hErrComplet))
+		Trace("[ERR BIN ouverture] " + sTable + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 		RETOUR
 	FIN
 	HLitPremier(sTable)
@@ -252,7 +268,7 @@ PROCÉDURE INTERNE CopierBinaire(sTable est chaîne, sBinCol est chaîne, sPKCol
 		SI HExécuteRequêteSQL(sdUpd, cnxCible, hRequêteSansCorrection, sSQL) ALORS
 			nMaj++
 		SINON
-			Trace("[ERR BIN UPDATE] " + sTable + " : " + HErreurInfo(hErrComplet))
+			Trace("[ERR BIN UPDATE] " + sTable + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 		FIN
 	FIN
 	HAnnuleDéclaration(sdUpd)
@@ -277,7 +293,7 @@ PROCÉDURE INTERNE ResyncSequences()
 		SI HExécuteRequêteSQL(sdRun, cnxCible, hRequêteSansCorrection, sSQL) ALORS
 			nSeq++
 		SINON
-			Trace("[ERR SEQ] " + sT + "." + sC + " : " + HErreurInfo(hErrComplet))
+			Trace("[ERR SEQ] " + sT + "." + sC + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 		FIN
 		HAnnuleDéclaration(sdRun)
 	FIN
@@ -307,6 +323,11 @@ POUR TOUTE CHAÎNE sExclue DE sColonnesExclues SÉPARÉE PAR ","
 	SI sExclue <> "" ALORS gtabColExclues[Minuscule(SansEspace(sExclue))] = Vrai
 FIN
 
+// Restriction facultative, pour un essai sur une petite table avant le run complet.
+POUR TOUTE CHAÎNE sExclue DE sTablesSeules SÉPARÉE PAR ","
+	SI sExclue <> "" ALORS gtabTablesSeules[Minuscule(SansEspace(sExclue))] = Vrai
+FIN
+
 
 // Un paramètre vide retombe sur la constante : rétrocompatible.
 SI sSrcServeur    = "" ALORS sSrcServeur    = SRC_SERVEUR
@@ -326,7 +347,7 @@ cnxSource.BaseDeDonnées = sSrcBase
 cnxSource.Utilisateur   = sSrcUser
 cnxSource.MotDePasse    = sSrcMdp
 SI PAS HOuvreConnexion(cnxSource) ALORS
-	Trace("[ERR CONNEXION] source : " + HErreurInfo(hErrComplet))
+	Trace("[ERR CONNEXION] source : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 	Erreur("Connexion HFSQL source impossible : " + HErreurInfo(hErrComplet))
 	RENVOYER Faux
 FIN
@@ -338,7 +359,7 @@ cnxCible.BaseDeDonnées = sPgBase
 cnxCible.Utilisateur   = sPgUser
 cnxCible.MotDePasse    = sPgMdp
 SI PAS HOuvreConnexion(cnxCible) ALORS
-	Trace("[ERR CONNEXION] cible : " + HErreurInfo(hErrComplet))
+	Trace("[ERR CONNEXION] cible : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 	Erreur("Connexion PostgreSQL cible impossible : " + HErreurInfo(hErrComplet))
 	HFermeConnexion(cnxSource)
 	RENVOYER Faux
@@ -351,6 +372,7 @@ sListeFic = HListeFichier()
 POUR TOUTE CHAÎNE sFichier DE sListeFic SÉPARÉE PAR RC
 	SI sFichier = "" ALORS CONTINUER
 	SI gtabTablesExclues[Minuscule(sFichier)] = Vrai ALORS CONTINUER
+	SI sTablesSeules <> "" ET gtabTablesSeules[Minuscule(sFichier)] <> Vrai ALORS CONTINUER
 	nTotal = CopierTable(sFichier)
 	SI nTotal >= 0 ALORS tabRapport[sFichier] = nTotal
 FIN
