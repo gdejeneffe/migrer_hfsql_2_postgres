@@ -119,22 +119,33 @@ FIN
 
 
 // ============================================================================
-//  Copie d'une table par INSERT paramétré. Renvoie nb écrits, -1 si erreur.
+//  Copie d'une table par INSERT. Renvoie nb écrits, -1 si erreur.
 //  Collecte au passage les colonnes binaires (traitées ensuite par CopierBinaire).
+//
+//  LES VALEURS SONT DES LITTÉRAUX SQL, construits ici — relevé le 2026-09-23.
+//  L'INSERT doit partir en hRequêteSansCorrection (sinon WINDEV le réécrit avec
+//  ses noms HFSQL), et dans ce mode le Connecteur Natif PostgreSQL ne LIE PAS les
+//  paramètres {p1} : il les remplace par leur texte brut, sans guillemets, sans
+//  NULL, sans échappement. D'où « VALUES (184, Audit interne, …) » -> 42601.
+//
+//  Chaque valeur part donc entre apostrophes, apostrophes internes doublées.
+//  PostgreSQL convertit un littéral non typé vers le type de la colonne : '184'
+//  vers integer, '2016-05-09' vers date, 'true' vers boolean. L'échappement des
+//  seules apostrophes suffit parce que standard_conforming_strings = on (défaut
+//  depuis PostgreSQL 9.1) : un antislash — les mémos RTF en sont pleins — y est
+//  un caractère ordinaire.
 // ============================================================================
 PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	sRub, sListeRub, sCle          sont des chaînes
-	sColonnes, sValeurs, sSQL, sVal sont des chaînes
-	sIso      est une chaîne
+	sColonnes, sSQL, sVal, sLigne  sont des chaînes
+	sLit                           est une chaîne
 	nEcrits, j, nType              sont des entiers = 0
 	tabCols   est un tableau de chaînes
-	tabParam  est un tableau de chaînes
-	tabEstDate est un tableau de booléens
-	tabType    est un tableau d'entiers
-	sdInsert est une Source de Données
-	sdVide   est une Source de Données
-	tabEnr    est un tableau associatif de Variant
-	tabBuffer est un tableau de tableaux associatifs de Variant
+	tabType   est un tableau d'entiers
+	tabUnique est un tableau de booléens
+	sdInsert  est une Source de Données
+	sdVide    est une Source de Données
+	tabBuffer est un tableau de chaînes              // une entrée = la liste VALUES d'une ligne
 
 	// --- Phase 1 : lecture source (bufferisée, curseur stable, HPasse) ---
 	HChangeConnexion(sFic, cnxSource)
@@ -156,17 +167,11 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 			Ajoute(gtabBinCol, sRub)
 			CONTINUER
 		FIN
-		j++
 		Ajoute(tabCols, sRub)
-		Ajoute(tabParam, "p" + j)
-		Ajoute(tabEstDate, (nType = wlDate OU nType = wlDateHeure))
 		Ajoute(tabType, nType)
-		SI j > 1 ALORS
-			sColonnes += ", "
-			sValeurs  += ", "
-		FIN
-		sColonnes += """" + gtabColPG[Minuscule(sFic + "." + sRub)] + """"
-		sValeurs  += "{p" + j + "}"
+		Ajoute(tabUnique, (gtabUnique[sCle] = Vrai))
+		SI tabCols.Occurrence > 1 ALORS sColonnes += ", "
+		sColonnes += """" + gtabColPG[sCle] + """"
 	FIN
 
 	SI tabCols.Occurrence = 0 ALORS
@@ -174,56 +179,67 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 		HFerme(sFic)
 		RENVOYER 0
 	FIN
-	sSQL = "INSERT INTO """ + gtabTablePG[Minuscule(sFic)] + """ (" + sColonnes + ") VALUES (" + sValeurs + ")"
+	sSQL = "INSERT INTO """ + gtabTablePG[Minuscule(sFic)] + """ (" + sColonnes + ") VALUES ("
 
 	HLitPremier(sFic)
 	TANTQUE PAS HEnDehors(sFic)
-		SupprimeTout(tabEnr)
+		sLigne = ""
 		POUR j = 1 À tabCols.Occurrence
 			sVal = {sFic + "." + tabCols[j]}
-			SI tabEstDate[j] ET (sVal = "" OU Gauche(sVal, 4) = "0000") ALORS
-				tabEnr[tabParam[j]] = Null                                  // date vide -> NULL
-			SINON SI gtabUnique[Minuscule(sFic + "." + tabCols[j])] = Vrai ET SansEspace(sVal) = "" ALORS
-				tabEnr[tabParam[j]] = Null                                  // UNIQUE vide -> NULL
+			SI (tabType[j] = wlDate OU tabType[j] = wlDateHeure) ET (sVal = "" OU Gauche(sVal, 4) = "0000") ALORS
+				sLit = "NULL"                                               // date vide -> NULL
+			SINON SI tabType[j] = wlHeure ET sVal = "" ALORS
+				sLit = "NULL"                                               // heure vide -> NULL
+			SINON SI tabUnique[j] ET SansEspace(sVal) = "" ALORS
+				sLit = "NULL"                                               // UNIQUE vide -> NULL
 			SINON SI tabType[j] = wlDate ALORS
-				// AAAAMMJJ -> AAAA-MM-JJ : sans correction, rien ne formate à notre place.
-				tabEnr[tabParam[j]] = Gauche(sVal, 4) + "-" + Milieu(sVal, 5, 2) + "-" + Milieu(sVal, 7, 2)
+				// AAAAMMJJ -> 'AAAA-MM-JJ'
+				sLit = "'" + Gauche(sVal, 4) + "-" + Milieu(sVal, 5, 2) + "-" + Milieu(sVal, 7, 2) + "'"
 			SINON SI tabType[j] = wlDateHeure ALORS
-				// AAAAMMJJHHMMSS[CC] -> AAAA-MM-JJ HH:MM:SS[.CC]
-				sIso = Gauche(sVal, 4) + "-" + Milieu(sVal, 5, 2) + "-" + Milieu(sVal, 7, 2) + " " + Milieu(sVal, 9, 2) + ":" + Milieu(sVal, 11, 2) + ":" + Milieu(sVal, 13, 2)
-				SI Taille(sVal) > 14 ALORS sIso += "." + Milieu(sVal, 15)
-				tabEnr[tabParam[j]] = sIso
+				// AAAAMMJJHHMMSS[CC] -> 'AAAA-MM-JJ HH:MM:SS[.CC]'
+				sLit = "'" + Gauche(sVal, 4) + "-" + Milieu(sVal, 5, 2) + "-" + Milieu(sVal, 7, 2) + " " + Milieu(sVal, 9, 2) + ":" + Milieu(sVal, 11, 2) + ":" + Milieu(sVal, 13, 2)
+				SI Taille(sVal) > 14 ALORS sLit += "." + Milieu(sVal, 15)
+				sLit += "'"
+			SINON SI tabType[j] = wlHeure ALORS
+				// HHMMSS[CC] -> 'HH:MM:SS[.CC]'
+				sLit = "'" + Gauche(sVal, 2) + ":" + Milieu(sVal, 3, 2) + ":" + Milieu(sVal, 5, 2)
+				SI Taille(sVal) > 6 ALORS sLit += "." + Milieu(sVal, 7)
+				sLit += "'"
+			SINON SI tabType[j] = wlBooléen ALORS
+				// Le texte d'un booléen WLangage n'est pas garanti ("1", "Vrai") :
+				// on teste la valeur, pas sa représentation.
+				sLit = "FALSE"
+				SI {sFic + "." + tabCols[j]} ALORS sLit = "TRUE"
 			SINON
-				tabEnr[tabParam[j]] = {sFic + "." + tabCols[j]}
+				sLit = "'" + Remplace(sVal, "'", "''") + "'"
 			FIN
+			SI j > 1 ALORS sLigne += ", "
+			sLigne += sLit
 		FIN
-		Ajoute(tabBuffer, tabEnr)
+		Ajoute(tabBuffer, sLigne)
 		HLitSuivant(sFic)
 	FIN
 	HFerme(sFic)
 
-	// --- Phase 2 : écriture cible (fichier rebranché sur PG, INSERT sans correction) ---
+	// --- Phase 2 : écriture cible, en hRequêteSansCorrection ---
+	//  Sans elle, WINDEV interprète la requête, reconnaît le fichier de l'analyse
+	//  et la RÉÉCRIT avec ses noms HFSQL : INSERT INTO "DOCUMENT" ("IDDOCUMENT",
+	//  ...) -> 42P01 sur chaque ligne. Le TRUNCATE est concerné au même titre : s'il
+	//  échoue, un rejeu double les lignes et bute sur la clé primaire.
 	HChangeConnexion(sFic, cnxCible)
-	SI PAS HExécuteRequêteSQL(sdVide, cnxCible, "TRUNCATE TABLE """ + gtabTablePG[Minuscule(sFic)] + """") ALORS
+	SI PAS HExécuteRequêteSQL(sdVide, cnxCible, hRequêteSansCorrection, "TRUNCATE TABLE """ + gtabTablePG[Minuscule(sFic)] + """") ALORS
 		Trace("[ERR TRUNCATE] " + sFic + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 	FIN
 	HAnnuleDéclaration(sdVide)
 
-	POUR TOUT tabEnr DE tabBuffer
-		POUR j = 1 À tabParam.Occurrence
-			{"sdInsert." + tabParam[j]} = tabEnr[tabParam[j]]
-		FIN
-		// hRequêteSansCorrection est indispensable ici. Sans elle, WINDEV interprète
-		// la requête, reconnaît le fichier de l'analyse et la RÉÉCRIT avec ses noms
-		// HFSQL : INSERT INTO "DOCUMENT" ("IDDOCUMENT", ...) -> 42P01, relation
-		// inexistante, sur chaque ligne. Relevé le 2026-09-23 au premier run réel.
-		SI HExécuteRequêteSQL(sdInsert, cnxCible, hRequêteSansCorrection, sSQL) ALORS
+	POUR TOUT sLigne DE tabBuffer
+		SI HExécuteRequêteSQL(sdInsert, cnxCible, hRequêteSansCorrection, sSQL + sLigne + ")") ALORS
 			nEcrits++
 		SINON
 			Trace("[ERR INSERT] " + sFic + " : " + Remplace(HErreurInfo(hErrComplet), RC, " | "))
 		FIN
+		HAnnuleDéclaration(sdInsert)
 	FIN
-	HAnnuleDéclaration(sdInsert)
 	Trace("[OK] " + sFic + " : " + nEcrits + " lignes")
 	RENVOYER nEcrits
 FIN
