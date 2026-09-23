@@ -94,9 +94,7 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 	sdMeta est une Source de Données
 
 	// Colonnes existantes côté PG (pour l'intersection)
-	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, ...
-		"SELECT table_name, column_name FROM information_schema.columns " + ...
-		"WHERE table_schema = 'public'")
+	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, "SELECT table_name, column_name FROM information_schema.columns " + "WHERE table_schema = 'public'")
 	POUR TOUT sdMeta
 		gtabColPG[Minuscule(sdMeta.table_name + "." + sdMeta.column_name)] = sdMeta.column_name
 		gtabTablePG[Minuscule(sdMeta.table_name)] = sdMeta.table_name
@@ -104,28 +102,19 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 	HAnnuleDéclaration(sdMeta)
 
 	// Colonnes sous contrainte UNIQUE
-	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, ...
-		"SELECT tc.table_name AS t, kcu.column_name AS c " + ...
-		"FROM information_schema.table_constraints tc " + ...
-		"JOIN information_schema.key_column_usage kcu " + ...
-		"  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " + ...
-		"WHERE tc.table_schema = 'public' AND tc.constraint_type = 'UNIQUE'")
+	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, "SELECT tc.table_name AS t, kcu.column_name AS c " + "FROM information_schema.table_constraints tc " + "JOIN information_schema.key_column_usage kcu " + "  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " + "WHERE tc.table_schema = 'public' AND tc.constraint_type = 'UNIQUE'")
 	POUR TOUT sdMeta
 		gtabUnique[Minuscule(sdMeta.t + "." + sdMeta.c)] = Vrai
 	FIN
 	HAnnuleDéclaration(sdMeta)
 
 	// Clé primaire (mono-colonne) par table
-	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, ...
-		"SELECT tc.table_name AS t, kcu.column_name AS c " + ...
-		"FROM information_schema.table_constraints tc " + ...
-		"JOIN information_schema.key_column_usage kcu " + ...
-		"  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " + ...
-		"WHERE tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY'")
+	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, "SELECT tc.table_name AS t, kcu.column_name AS c " + "FROM information_schema.table_constraints tc " + "JOIN information_schema.key_column_usage kcu " + "  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " + "WHERE tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY'")
 	POUR TOUT sdMeta
 		gtabPK[Minuscule(sdMeta.t)] = sdMeta.c
 	FIN
 	HAnnuleDéclaration(sdMeta)
+FIN
 
 
 // ============================================================================
@@ -146,7 +135,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 
 	// --- Phase 1 : lecture source (bufferisée, curseur stable, HPasse) ---
 	HChangeConnexion(sFic, cnxSource)
-	HPasse(sFic, SRC_MDP_FICHIER)
+	HPasse(sFic, sSrcMdpFichier)
 	SI PAS HOuvre(sFic) ALORS
 		Trace("[ERR ouverture] " + sFic + " : " + HErreurInfo(hErrComplet))
 		RENVOYER -1
@@ -221,6 +210,7 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	HAnnuleDéclaration(sdInsert)
 	Trace("[OK] " + sFic + " : " + nEcrits + " lignes")
 	RENVOYER nEcrits
+FIN
 
 
 // ============================================================================
@@ -240,7 +230,7 @@ PROCÉDURE INTERNE CopierBinaire(sTable est chaîne, sBinCol est chaîne, sPKCol
 	FIN
 
 	HChangeConnexion(sTable, cnxSource)
-	HPasse(sTable, SRC_MDP_FICHIER)
+	HPasse(sTable, sSrcMdpFichier)
 	SI PAS HOuvre(sTable) ALORS
 		Trace("[ERR BIN ouverture] " + sTable + " : " + HErreurInfo(hErrComplet))
 		RETOUR
@@ -258,9 +248,7 @@ PROCÉDURE INTERNE CopierBinaire(sTable est chaîne, sBinCol est chaîne, sPKCol
 
 	HChangeConnexion(sTable, cnxCible)
 	POUR k = 1 À tabPK.Occurrence
-		sSQL = "UPDATE """ + gtabTablePG[Minuscule(sTable)] + """ SET """ + ...
-			gtabColPG[Minuscule(sTable + "." + sBinCol)] + """ = decode('" + tabHex[k] + ...
-			"','hex') WHERE """ + sPKCol + """ = '" + tabPK[k] + "'"
+		sSQL = "UPDATE """ + gtabTablePG[Minuscule(sTable)] + """ SET """ + gtabColPG[Minuscule(sTable + "." + sBinCol)] + """ = decode('" + tabHex[k] + "','hex') WHERE """ + sPKCol + """ = '" + tabPK[k] + "'"
 		SI HExécuteRequêteSQL(sdUpd, cnxCible, hRequêteSansCorrection, sSQL) ALORS
 			nMaj++
 		SINON
@@ -269,6 +257,7 @@ PROCÉDURE INTERNE CopierBinaire(sTable est chaîne, sBinCol est chaîne, sPKCol
 	FIN
 	HAnnuleDéclaration(sdUpd)
 	Trace("[BIN] " + sTable + "." + sBinCol + " : " + nMaj + " maj")
+FIN
 
 
 // ============================================================================
@@ -280,15 +269,11 @@ PROCÉDURE INTERNE ResyncSequences()
 	sT, sC, sSQL sont des chaînes
 	nSeq est un entier = 0
 
-	HExécuteRequêteSQL(sdSeq, cnxCible, hRequêteSansCorrection, ...
-		"SELECT table_name AS t, column_name AS c FROM information_schema.columns " + ...
-		"WHERE table_schema = 'public' " + ...
-		"  AND (column_default LIKE 'nextval%' OR is_identity = 'YES')")
+	HExécuteRequêteSQL(sdSeq, cnxCible, hRequêteSansCorrection, "SELECT table_name AS t, column_name AS c FROM information_schema.columns " + "WHERE table_schema = 'public' " + "  AND (column_default LIKE 'nextval%' OR is_identity = 'YES')")
 	POUR TOUT sdSeq
 		sT = sdSeq.t
 		sC = sdSeq.c
-		sSQL = "SELECT setval(pg_get_serial_sequence('""" + sT + """','" + sC + "'), " + ...
-			"COALESCE((SELECT MAX(""" + sC + """) FROM """ + sT + """),1))"
+		sSQL = "SELECT setval(pg_get_serial_sequence('""" + sT + """','" + sC + "'), " + "COALESCE((SELECT MAX(""" + sC + """) FROM """ + sT + """),1))"
 		SI HExécuteRequêteSQL(sdRun, cnxCible, hRequêteSansCorrection, sSQL) ALORS
 			nSeq++
 		SINON
@@ -298,6 +283,7 @@ PROCÉDURE INTERNE ResyncSequences()
 	FIN
 	HAnnuleDéclaration(sdSeq)
 	Trace("[SEQ] " + nSeq + " séquence(s) resynchronisée(s)")
+FIN
 
 
 // ============================== CORPS PRINCIPAL =============================
