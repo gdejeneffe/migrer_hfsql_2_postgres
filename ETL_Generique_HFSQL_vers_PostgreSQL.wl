@@ -326,6 +326,7 @@ cnxSource.BaseDeDonnées = sSrcBase
 cnxSource.Utilisateur   = sSrcUser
 cnxSource.MotDePasse    = sSrcMdp
 SI PAS HOuvreConnexion(cnxSource) ALORS
+	Trace("[ERR CONNEXION] source : " + HErreurInfo(hErrComplet))
 	Erreur("Connexion HFSQL source impossible : " + HErreurInfo(hErrComplet))
 	RENVOYER Faux
 FIN
@@ -337,6 +338,7 @@ cnxCible.BaseDeDonnées = sPgBase
 cnxCible.Utilisateur   = sPgUser
 cnxCible.MotDePasse    = sPgMdp
 SI PAS HOuvreConnexion(cnxCible) ALORS
+	Trace("[ERR CONNEXION] cible : " + HErreurInfo(hErrComplet))
 	Erreur("Connexion PostgreSQL cible impossible : " + HErreurInfo(hErrComplet))
 	HFermeConnexion(cnxSource)
 	RENVOYER Faux
@@ -367,6 +369,11 @@ POUR TOUT ÉLÉMENT nTotal, sFichier DE tabRapport
 	Trace(sFichier + " : " + nTotal)
 FIN
 
+// Chaque fichier copié a été rebranché sur cnxCible, et le reste après sa
+// fermeture. "" leur rend la connexion de l'analyse : sans cela, l'application qui
+// a lancé l'ETL — et toute pesée qui le suit — lirait PostgreSQL en croyant lire
+// HFSQL.
+HChangeConnexion("*", "")
 HFermeConnexion(cnxSource)
 HFermeConnexion(cnxCible)
 RENVOYER Vrai
