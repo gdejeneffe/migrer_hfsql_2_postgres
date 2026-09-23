@@ -74,6 +74,7 @@ gtabColExclues    est un tableau associatif de booléens
 // ======================= MÉTADONNÉES (auto, remplies au démarrage) ==========
 gtabColPG    est un tableau associatif de chaînes    // "table.col" minuscule -> NOM RÉEL de la colonne côté PG
 gtabTablePG  est un tableau associatif de chaînes    // "table" minuscule    -> NOM RÉEL de la table côté PG
+gtabTypePG   est un tableau associatif de chaînes    // "table.col" minuscule -> data_type PostgreSQL
 gtabUnique   est un tableau associatif de booléens   // "table.col" sous contrainte UNIQUE
 gtabPK       est un tableau associatif de chaînes     // table -> colonne PK
 gtabBinTable est un tableau de chaînes                // tables ayant une colonne binaire
@@ -95,10 +96,11 @@ PROCÉDURE INTERNE ChargerMetadonnees()
 	sdMeta est une Source de Données
 
 	// Colonnes existantes côté PG (pour l'intersection)
-	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, "SELECT table_name, column_name FROM information_schema.columns " + "WHERE table_schema = 'public'")
+	HExécuteRequêteSQL(sdMeta, cnxCible, hRequêteSansCorrection, "SELECT table_name, column_name, data_type FROM information_schema.columns " + "WHERE table_schema = 'public'")
 	POUR TOUT sdMeta
 		gtabColPG[Minuscule(sdMeta.table_name + "." + sdMeta.column_name)] = sdMeta.column_name
 		gtabTablePG[Minuscule(sdMeta.table_name)] = sdMeta.table_name
+		gtabTypePG[Minuscule(sdMeta.table_name + "." + sdMeta.column_name)] = sdMeta.data_type
 	FIN
 	HAnnuleDéclaration(sdMeta)
 
@@ -143,6 +145,9 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 	tabCols   est un tableau de chaînes
 	tabType   est un tableau d'entiers
 	tabUnique est un tableau de booléens
+	tabTexte  est un tableau de booléens            // colonne PG texte : le vide y est une valeur
+	tabDatePG est un tableau de booléens            // colonne PG date ou timestamp
+	sTypePG   est une chaîne
 	sdInsert  est une Source de Données
 	sdVide    est une Source de Données
 	tabBuffer est un tableau de chaînes              // une entrée = la liste VALUES d'une ligne
@@ -170,6 +175,12 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 		Ajoute(tabCols, sRub)
 		Ajoute(tabType, nType)
 		Ajoute(tabUnique, (gtabUnique[sCle] = Vrai))
+		// Le type de la COLONNE CIBLE décide du vide, pas TypeVar : une rubrique Date
+		// HFSQL arrive en chaîne AAAAMMJJ, et TypeVar ne la reconnaît pas comme date.
+		// Sans cela, une date vide partait en '' -> 22007 (relevé le 2026-09-23).
+		sTypePG = gtabTypePG[sCle]
+		Ajoute(tabTexte, (sTypePG = "character varying" OU sTypePG = "text" OU sTypePG = "character"))
+		Ajoute(tabDatePG, (sTypePG = "date" OU Gauche(sTypePG, 9) = "timestamp"))
 		SI tabCols.Occurrence > 1 ALORS sColonnes += ", "
 		sColonnes += """" + gtabColPG[sCle] + """"
 	FIN
@@ -186,10 +197,10 @@ PROCÉDURE INTERNE CopierTable(sFic est chaîne)
 		sLigne = ""
 		POUR j = 1 À tabCols.Occurrence
 			sVal = {sFic + "." + tabCols[j]}
-			SI (tabType[j] = wlDate OU tabType[j] = wlDateHeure) ET (sVal = "" OU Gauche(sVal, 4) = "0000") ALORS
-				sLit = "NULL"                                               // date vide -> NULL
-			SINON SI tabType[j] = wlHeure ET sVal = "" ALORS
-				sLit = "NULL"                                               // heure vide -> NULL
+			SI PAS tabTexte[j] ET SansEspace(sVal) = "" ALORS
+				sLit = "NULL"                                               // vide hors texte -> NULL
+			SINON SI (tabDatePG[j] OU tabType[j] = wlDate OU tabType[j] = wlDateHeure) ET Gauche(sVal, 4) = "0000" ALORS
+				sLit = "NULL"                                               // date nulle -> NULL
 			SINON SI tabUnique[j] ET SansEspace(sVal) = "" ALORS
 				sLit = "NULL"                                               // UNIQUE vide -> NULL
 			SINON SI tabType[j] = wlDate ALORS
